@@ -1,0 +1,77 @@
+server:
+  error:
+    include-message: always
+    include-binding-errors: always
+    include-stacktrace: always
+  port: ${SERVER_PORT:8080}
+
+spring:
+  config:
+    import:
+      - optional:dotenv:.env
+
+  application:
+    name: weather-service
+
+  jackson:
+    serialization:
+      indent_output: true
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+  cache:
+    # Use Redis as the default cache backend (L2)
+    type: redis
+
+weather:
+  api:
+    # Must be provided via env or secrets
+    key: ${WEATHER_API_KEY:}
+    # Base URL for the external weather provider
+    base-url: https://api.openweathermap.org
+
+app:
+  cors:
+    # List of allowed origins for CORS; can be overridden per environment
+    allowed-origins:
+      - ${CORS_ALLOWED_ORIGIN:http://localhost:3000}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+  endpoint:
+    health:
+      show-details: always
+
+logging:
+  level:
+    root: INFO
+    com.weather: DEBUG
+
+resilience4j:
+  retry:
+    instances:
+      weatherService:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        exponential-max-wait-duration: 2s
+        retry-exceptions:
+          - org.springframework.web.reactive.function.client.WebClientRequestException
+          - java.io.IOException
+
+  circuitbreaker:
+    instances:
+      weatherService:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 2
+        minimum-number-of-calls: 2
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 10s
+        register-health-indicator: true
