@@ -1,5 +1,6 @@
 package com.weather.service;
 
+import com.weather.dto.ForecastDto;
 import com.weather.dto.HourlyTemperatureDto;
 import com.weather.dto.TemperatureDto;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -17,6 +18,8 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.List;
+
+import static com.weather.config.cache.CacheConfig.*;
 
 @Service
 @Slf4j
@@ -44,7 +47,7 @@ public class WeatherService {
      * @return the current {@link TemperatureDto}
      */
     @PreAuthorize("hasAnyRole('USER','ADMIN')")
-    @Cacheable(cacheNames = "currentTemp", key = "#city")
+    @Cacheable(cacheNames = CURRENT_CACHE, key = "#city")
     @Retry(name = RESILIENCE_INSTANCE, fallbackMethod = "currentFallback")
     @CircuitBreaker(name = RESILIENCE_INSTANCE, fallbackMethod = "currentFallback")
     public TemperatureDto getCurrentTemperature(String city, LocalDate date) {
@@ -73,7 +76,7 @@ public class WeatherService {
      * Same resilience patterns/fallback.
      */
     @PreAuthorize("hasAnyRole('USER','ADMIN')")
-    @Cacheable(cacheNames = "hourlyForecast",
+    @Cacheable(cacheNames = HOURLY_CACHE,
             key = "T(com.weather.dto.HourlyForecastKey).of(#city,#date)")
     @Retry(name = RESILIENCE_INSTANCE, fallbackMethod = "forecastFallback")
     @CircuitBreaker(
@@ -137,8 +140,33 @@ public class WeatherService {
         );
     }
 
+    /**
+     * @param city e.g. "Warsaw,PL"
+     * @return up to 40 forecast points, each a 3-hour step
+     */
+    @PreAuthorize("hasAnyRole('USER','ADMIN')")
+    @Cacheable(cacheNames = FIVE_DAYS_CACHE, key = "#city")
+    @Retry(name = RESILIENCE_INSTANCE, fallbackMethod = "fiveDayFallback")
+    @CircuitBreaker(name = RESILIENCE_INSTANCE, fallbackMethod = "fiveDayFallback")
+    public List<ForecastDto> getFiveDayForecast(String city) {
+        log.info("Fetching 5-day forecast for '{}'", city);
+        List<ForecastDto> batch = client.fetchFiveDayForecast(city);
+        log.debug("Fetched {} points for '{}'", batch.size(), city);
+        return batch;
+    }
+
+    @SuppressWarnings("unused") // used reflectively
+    private List<ForecastDto> fiveDayFallback(String city, Throwable ex) {
+        log.warn("Fallback for 5-day forecast '{}': {}", city, ex.toString());
+        throw new ResponseStatusException(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "Unable to fetch 5-day forecast for " + city,
+                ex
+        );
+    }
+
     @PreAuthorize("hasRole('ADMIN')")
-    @CacheEvict(cacheNames = {"currentTemp","hourlyForecast"}, allEntries = true)
+    @CacheEvict(cacheNames = {CURRENT_CACHE, HOURLY_CACHE}, allEntries = true)
     public void purgeCache() {
         // no implementation needed; annotation handles eviction
     }

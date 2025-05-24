@@ -1,4 +1,4 @@
-package com.weather.config;
+package com.weather.config.cache;
 
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.cache.annotation.EnableCaching;
@@ -20,8 +20,11 @@ import org.springframework.data.redis.connection.RedisConnectionFactory;
 public class CacheConfig {
 
     // the two cache names we use in @Cacheable
-    private static final String CURRENT = "currentTemp";
-    private static final String HOURLY  = "hourlyForecast";
+    public static final String CURRENT_CACHE = "currentTemp";
+
+    public static final String HOURLY_CACHE  = "hourlyForecast";
+
+    public static final String FIVE_DAYS_CACHE  = "fiveDaysForecast";
 
     /**
      * L1: In‐JVM Caffeine cache manager.
@@ -29,11 +32,11 @@ public class CacheConfig {
      */
     @Bean
     public CaffeineCacheManager caffeineCacheManager() {
-        CaffeineCacheManager mgr = new CaffeineCacheManager(CURRENT, HOURLY);
+        CaffeineCacheManager mgr = new CaffeineCacheManager(CURRENT_CACHE, HOURLY_CACHE, FIVE_DAYS_CACHE);
         mgr.setCaffeine(
                 Caffeine.newBuilder()
-                        .expireAfterWrite(Duration.ofMinutes(5))   // for currentTemp
-                        .maximumSize(5_000)
+                        .expireAfterWrite(Duration.ofMinutes(30))   // for currentTemp
+                        .maximumSize(10_000)
         );
         // We’ll only use this manager for currentTemp → override TTL below
         // and create a separate spec for hourlyForecast if you need different L1 TTLs.
@@ -53,21 +56,23 @@ public class CacheConfig {
 
         return RedisCacheManager.builder(cf)
                 .cacheDefaults(defaultCfg)
-                .withCacheConfiguration(CURRENT,
+                .withCacheConfiguration(CURRENT_CACHE,
                         defaultCfg.entryTtl(Duration.ofMinutes(5)))
-                .withCacheConfiguration(HOURLY,
+                .withCacheConfiguration(HOURLY_CACHE,
                         defaultCfg.entryTtl(Duration.ofHours(1)))
+                .withCacheConfiguration(FIVE_DAYS_CACHE,
+                        defaultCfg.entryTtl(Duration.ofHours(6)))
                 .build();
     }
 
     /**
      * Compose the two managers: first try Caffeine (L1), then fall back to Redis (L2).
      */
-    @Bean
+/*    @Bean
     @Primary
-    public CacheManager cacheManager(
+    public CacheManager cacheManager4(
             CaffeineCacheManager caffeineCacheManager,
-            RedisCacheManager      redisCacheManager) {
+            RedisCacheManager redisCacheManager) {
         CompositeCacheManager mgr = new CompositeCacheManager(
                 caffeineCacheManager,
                 redisCacheManager
@@ -75,5 +80,13 @@ public class CacheConfig {
         // if neither has the cache, don’t create an empty one automatically:
         mgr.setFallbackToNoOpCache(false);
         return mgr;
+    }*/
+
+    @Bean
+    @Primary
+    public CacheManager cacheManager(
+            CaffeineCacheManager caffeine,
+            RedisCacheManager   redis) {
+        return new TwoLevelCacheManager(caffeine, redis);
     }
 }

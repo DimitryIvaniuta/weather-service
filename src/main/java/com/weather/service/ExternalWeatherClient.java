@@ -2,6 +2,7 @@ package com.weather.service;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.weather.config.WeatherApiProperties;
+import com.weather.dto.ForecastDto;
 import com.weather.dto.HourlyTemperatureDto;
 import com.weather.dto.TemperatureDto;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -207,6 +209,73 @@ public class ExternalWeatherClient {
                 .toList();
     }
 
+
+    /**
+     * Calls GET /data/2.5/forecast?q={city}&units=metric&appid={key}
+     * @param city e.g. "London,UK"
+     * @return up to 40 ForecastDto entries (3h steps for 5 days)
+     */
+    public List<ForecastDto> fetchFiveDayForecast(String city) {
+        ForecastResponse resp;
+        try {
+            resp = webClient.get()
+                    .uri(uri -> uri
+                            .path("/data/2.5/forecast")
+                            .queryParam("q",     city)
+                            .queryParam("units", "metric")
+                            .queryParam("appid", props.getKey())
+                            .build())
+                    .retrieve()
+                    // handle 401 as unauthorized
+                    .onStatus(s -> s.value() == 401,
+                            clientResp -> Mono.error(new ResponseStatusException(
+                                    HttpStatus.UNAUTHORIZED,
+                                    "Invalid API key for weather provider")))
+                    // other 4xx → 502
+                    .onStatus(HttpStatusCode::is4xxClientError,
+                            clientResp -> Mono.error(new ResponseStatusException(
+                                    HttpStatus.BAD_GATEWAY,
+                                    "Upstream 4xx calling forecast: " + clientResp.statusCode())))
+                    // 5xx → 502
+                    .onStatus(HttpStatusCode::is5xxServerError,
+                            clientResp -> Mono.error(new ResponseStatusException(
+                                    HttpStatus.BAD_GATEWAY,
+                                    "Upstream 5xx calling forecast: " + clientResp.statusCode())))
+                    .bodyToMono(ForecastResponse.class)
+                    .block(Duration.ofSeconds(3));
+        } catch (WebClientResponseException e) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Error fetching 5-day forecast: " + e.getStatusCode(), e);
+        } catch (Exception e) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Failed to fetch 5-day forecast for " + city, e);
+        }
+
+        if (resp == null || resp.list == null) {
+            throw new ResponseStatusException(
+                    HttpStatus.SERVICE_UNAVAILABLE,
+                    "Empty forecast response for " + city);
+        }
+
+        DateTimeFormatter fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+        return resp.list.stream()
+                .map(item -> {
+                    LocalDateTime at = LocalDateTime.parse(item.dtTxt, fmt);
+                    return ForecastDto.of(
+                            city,
+                            at,
+                            item.main.temp,
+                            item.main.feelsLike,
+                            item.main.humidity,
+                            item.weather.getFirst().description
+                    );
+                })
+                .toList();
+    }
+
+
     private GeoResponse geocodeCity(String city) {
         GeoResponse[] geos;
         try {
@@ -265,4 +334,22 @@ public class ExternalWeatherClient {
         ) {
         }
     }
+
+    private record ForecastResponse(List<Item> list) {
+    }
+
+    private record Item(
+            Main main,
+            List<Weather> weather,
+            @JsonProperty("dt_txt") String dtTxt
+    ) {
+    }
+
+    private record Main(
+            double temp,
+            @JsonProperty("feels_like") double feelsLike,
+            int humidity
+    ) {
+    }
+
 }

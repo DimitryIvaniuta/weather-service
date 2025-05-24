@@ -1,5 +1,6 @@
 package com.weather.controller;
 
+import com.weather.dto.ForecastDto;
 import com.weather.dto.HourlyTemperatureDto;
 import com.weather.dto.TemperatureDto;
 import com.weather.service.WeatherService;
@@ -63,6 +64,10 @@ public class WeatherController {
         return weatherService.getHourlyForecast(city, date);
     }
 
+    @GetMapping("/forecast")
+    public List<ForecastDto> get5DayForecast(@RequestParam("city") String city) {
+        return weatherService.getFiveDayForecast(city);
+    }
     /**
      * Clears all entries in both the current‐temperature and hourly‐forecast caches.
      * <p>
@@ -76,4 +81,6 @@ public class WeatherController {
         weatherService.purgeCache();
         return ResponseEntity.noContent().build();
     }
+
+
 }
